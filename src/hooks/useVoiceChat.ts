@@ -297,12 +297,38 @@ export function useVoiceChat({
 
         const inputData = e.inputBuffer.getChannelData(0);
 
+        // 计算音频能量，判断是否为有效数据
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          sum += inputData[i] * inputData[i];
+        }
+        const rms = Math.sqrt(sum / inputData.length);
+
+        // 如果音频能量低于阈值（静音或无效数据），则不发送
+        // RMS阈值设为0.01，可以过滤掉大部分静音和无效数据
+        const SILENCE_THRESHOLD = 0.01;
+        if (rms < SILENCE_THRESHOLD) {
+          return;
+        }
+
         // 将Float32Array转换为Int16Array（PCM格式）以减少数据量
         const pcmData = new Int16Array(inputData.length);
+        let zeroCount = 0;
         for (let i = 0; i < inputData.length; i++) {
           // 将-1到1的浮点数转换为-32768到32767的整数
           const s = Math.max(-1, Math.min(1, inputData[i]));
           pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+
+          // 统计接近0的样本数量（阈值为256，约为1%的最大值）
+          if (Math.abs(pcmData[i]) < 256) {
+            zeroCount++;
+          }
+        }
+
+        // 如果超过95%的数据接近0，则认为是无效数据包，不发送
+        const zeroRatio = zeroCount / pcmData.length;
+        if (zeroRatio > 0.95) {
+          return;
         }
 
         // 发送PCM数据到服务器
