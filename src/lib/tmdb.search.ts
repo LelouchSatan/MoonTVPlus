@@ -2,6 +2,7 @@
 
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import nodeFetch from 'node-fetch';
+import { getNextApiKey } from './tmdb.client';
 
 export interface TMDBSearchResult {
   id: number;
@@ -32,12 +33,13 @@ export async function searchTMDB(
   year?: number
 ): Promise<{ code: number; result: TMDBSearchResult | null }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, result: null };
     }
 
     // 使用 multi search 同时搜索电影和电视剧
-    let url = `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
+    let url = `https://api.themoviedb.org/3/search/multi?api_key=${actualKey}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
 
     // 如果提供了年份，添加到搜索参数中
     if (year) {
@@ -121,11 +123,12 @@ export async function getTVSeasons(
   proxy?: string
 ): Promise<{ code: number; seasons: TMDBSeasonInfo[] | null }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, seasons: null };
     }
 
-    const url = `https://api.themoviedb.org/3/tv/${tvId}?api_key=${apiKey}&language=zh-CN`;
+    const url = `https://api.themoviedb.org/3/tv/${tvId}?api_key=${actualKey}&language=zh-CN`;
 
     const fetchOptions: any = proxy
       ? {
@@ -171,11 +174,12 @@ export async function getTVSeasonDetails(
   proxy?: string
 ): Promise<{ code: number; season: TMDBSeasonInfo | null }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, season: null };
     }
 
-    const url = `https://api.themoviedb.org/3/tv/${tvId}/season/${seasonNumber}?api_key=${apiKey}&language=zh-CN`;
+    const url = `https://api.themoviedb.org/3/tv/${tvId}/season/${seasonNumber}?api_key=${actualKey}&language=zh-CN`;
 
     const fetchOptions: any = proxy
       ? {

@@ -6,6 +6,7 @@
 
 import { fetchDoubanData as fetchDoubanAPI } from '@/lib/douban';
 import { searchTMDB, getTVSeasons } from '@/lib/tmdb.search';
+import { getNextApiKey } from '@/lib/tmdb.client';
 
 export interface VideoContext {
   title?: string;
@@ -251,7 +252,8 @@ async function fetchTMDBData(
   tmdbProxy?: string
 ): Promise<any> {
   try {
-    if (!tmdbApiKey) {
+    const actualKey = getNextApiKey(tmdbApiKey || '');
+    if (!actualKey) {
       console.log('⚠️ TMDB API Key 未配置，跳过TMDB数据获取');
       return null;
     }
@@ -263,7 +265,7 @@ async function fetchTMDBData(
 
     // 使用 TMDB API 获取详情
     // TMDB API: https://api.themoviedb.org/3/{type}/{id}
-    const url = `https://api.themoviedb.org/3/${params.type}/${params.id}?api_key=${tmdbApiKey}&language=zh-CN&append_to_response=keywords,similar`;
+    const url = `https://api.themoviedb.org/3/${params.type}/${params.id}?api_key=${actualKey}&language=zh-CN&append_to_response=keywords,similar`;
 
     console.log('📡 获取TMDB详情:', params.type, params.id);
 

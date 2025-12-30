@@ -183,6 +183,7 @@ export class DbManager {
     enabledApis?: string[];
     created_at: number;
     playrecord_migrated?: boolean;
+    favorite_migrated?: boolean;
   } | null> {
     if (typeof (this.storage as any).getUserInfoV2 === 'function') {
       return (this.storage as any).getUserInfoV2(userName);

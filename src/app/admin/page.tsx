@@ -6382,7 +6382,7 @@ const SiteConfigComponent = ({
           </label>
           <input
             type='text'
-            placeholder='请输入 TMDB API Key'
+            placeholder='请输入 TMDB API Key（多个key用英文逗号分隔）'
             value={siteSettings.TMDBApiKey}
             onChange={(e) =>
               setSiteSettings((prev) => ({
@@ -6393,7 +6393,7 @@ const SiteConfigComponent = ({
             className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 focus:border-transparent'
           />
           <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-            配置后首页将显示 TMDB 即将上映电影。获取 API Key 请访问{' '}
+            配置后首页将显示 TMDB 即将上映电影。支持配置多个 API Key（用英文逗号分隔）以实现轮询，避免单个 Key 请求限制。获取 API Key 请访问{' '}
             <a
               href='https://www.themoviedb.org/settings/api'
               target='_blank'
@@ -8927,6 +8927,24 @@ function AdminPageClient() {
               </button>
             )}
           </div>
+
+          {/* TMDB 未配置提示 */}
+          {config && !config.SiteConfig.TMDBApiKey && (
+            <div className='bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-4'>
+              <div className='flex items-start gap-3'>
+                <div className='flex-shrink-0 mt-0.5'>
+                  <svg className='w-5 h-5 text-blue-600 dark:text-blue-400' fill='currentColor' viewBox='0 0 20 20'>
+                    <path fillRule='evenodd' d='M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z' clipRule='evenodd' />
+                  </svg>
+                </div>
+                <div className='flex-1'>
+                  <p className='text-sm font-medium text-blue-800 dark:text-blue-300'>
+                    未配置 TMDB API Key，配置后可获得更丰富的影视信息和推荐内容
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* 配置文件标签 - 仅站长可见 */}
           {role === 'owner' && (

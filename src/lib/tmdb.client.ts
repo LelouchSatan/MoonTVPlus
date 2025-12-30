@@ -3,6 +3,28 @@
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import nodeFetch from 'node-fetch';
 
+// TMDB API Key 轮询管理
+let currentKeyIndex = 0;
+
+/**
+ * 解析并获取下一个可用的 TMDB API Key
+ * @param apiKeys - API Key 字符串（支持逗号分隔的多个key）
+ * @returns 当前应使用的 API Key
+ */
+export function getNextApiKey(apiKeys: string): string {
+  if (!apiKeys) return '';
+
+  const keys = apiKeys.split(',').map(k => k.trim()).filter(k => k);
+  if (keys.length === 0) return '';
+  if (keys.length === 1) return keys[0];
+
+  // 轮询获取下一个key
+  const key = keys[currentKeyIndex % keys.length];
+  currentKeyIndex = (currentKeyIndex + 1) % keys.length;
+
+  return key;
+}
+
 export interface TMDBMovie {
   id: number;
   title: string;
@@ -63,11 +85,12 @@ export async function getTMDBUpcomingMovies(
   proxy?: string
 ): Promise<{ code: number; list: TMDBMovie[] }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, list: [] };
     }
 
-    const url = `https://api.themoviedb.org/3/movie/upcoming?api_key=${apiKey}&language=zh-CN&page=${page}&region=${region}`;
+    const url = `https://api.themoviedb.org/3/movie/upcoming?api_key=${actualKey}&language=zh-CN&page=${page}&region=${region}`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -113,12 +136,13 @@ export async function getTMDBUpcomingTVShows(
   proxy?: string
 ): Promise<{ code: number; list: TMDBTVShow[] }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, list: [] };
     }
 
     // 使用 on_the_air 接口获取正在播出的电视剧
-    const url = `https://api.themoviedb.org/3/tv/on_the_air?api_key=${apiKey}&language=zh-CN&page=${page}`;
+    const url = `https://api.themoviedb.org/3/tv/on_the_air?api_key=${actualKey}&language=zh-CN&page=${page}`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -242,12 +266,13 @@ export async function getTMDBTrendingContent(
   proxy?: string
 ): Promise<{ code: number; list: TMDBItem[] }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, list: [] };
     }
 
     // 获取本周热门内容（电影+电视剧）
-    const url = `https://api.themoviedb.org/3/trending/all/week?api_key=${apiKey}&language=zh-CN`;
+    const url = `https://api.themoviedb.org/3/trending/all/week?api_key=${actualKey}&language=zh-CN`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -370,11 +395,12 @@ export async function searchTMDBMulti(
   proxy?: string
 ): Promise<{ code: number; results: any[] }> {
   try {
-    if (!apiKey || !query) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey || !query) {
       return { code: 400, results: [] };
     }
 
-    const url = `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
+    const url = `https://api.themoviedb.org/3/search/multi?api_key=${actualKey}&language=zh-CN&query=${encodeURIComponent(query)}&page=1`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -419,11 +445,12 @@ export async function getTMDBMovieRecommendations(
   proxy?: string
 ): Promise<{ code: number; results: TMDBMovie[] }> {
   try {
-    if (!apiKey || !movieId) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey || !movieId) {
       return { code: 400, results: [] };
     }
 
-    const url = `https://api.themoviedb.org/3/movie/${movieId}/recommendations?api_key=${apiKey}&language=zh-CN&page=1`;
+    const url = `https://api.themoviedb.org/3/movie/${movieId}/recommendations?api_key=${actualKey}&language=zh-CN&page=1`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -468,11 +495,12 @@ export async function getTMDBTVRecommendations(
   proxy?: string
 ): Promise<{ code: number; results: TMDBTVShow[] }> {
   try {
-    if (!apiKey || !tvId) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey || !tvId) {
       return { code: 400, results: [] };
     }
 
-    const url = `https://api.themoviedb.org/3/tv/${tvId}/recommendations?api_key=${apiKey}&language=zh-CN&page=1`;
+    const url = `https://api.themoviedb.org/3/tv/${tvId}/recommendations?api_key=${actualKey}&language=zh-CN&page=1`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -517,11 +545,12 @@ export async function getTMDBMovieDetails(
   proxy?: string
 ): Promise<{ code: number; details: any }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, details: null };
     }
 
-    const url = `https://api.themoviedb.org/3/movie/${movieId}?api_key=${apiKey}&language=zh-CN`;
+    const url = `https://api.themoviedb.org/3/movie/${movieId}?api_key=${actualKey}&language=zh-CN`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
@@ -566,11 +595,12 @@ export async function getTMDBTVDetails(
   proxy?: string
 ): Promise<{ code: number; details: any }> {
   try {
-    if (!apiKey) {
+    const actualKey = getNextApiKey(apiKey);
+    if (!actualKey) {
       return { code: 400, details: null };
     }
 
-    const url = `https://api.themoviedb.org/3/tv/${tvId}?api_key=${apiKey}&language=zh-CN`;
+    const url = `https://api.themoviedb.org/3/tv/${tvId}?api_key=${actualKey}&language=zh-CN`;
     const fetchOptions: any = proxy
       ? {
           agent: new HttpsProxyAgent(proxy, {
