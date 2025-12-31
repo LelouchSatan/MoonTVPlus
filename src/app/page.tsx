@@ -2,7 +2,7 @@
 
 'use client';
 
-import { ChevronRight, Bot } from 'lucide-react';
+import { ChevronRight, Bot, ListVideo } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 
@@ -40,6 +40,7 @@ function HomeClient() {
   const [showHttpWarning, setShowHttpWarning] = useState(true);
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [sourceSearchEnabled, setSourceSearchEnabled] = useState(true);
 
   // 检查AI功能是否启用
   useEffect(() => {
@@ -48,6 +49,14 @@ function HomeClient() {
         (window as any).RUNTIME_CONFIG?.AI_ENABLED &&
         (window as any).RUNTIME_CONFIG?.AI_ENABLE_HOMEPAGE_ENTRY;
       setAiEnabled(enabled);
+    }
+  }, []);
+
+  // 检查源站寻片功能是否启用
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const enabled = (window as any).RUNTIME_CONFIG?.ENABLE_SOURCE_SEARCH !== false;
+      setSourceSearchEnabled(enabled);
     }
   }, []);
 
@@ -154,9 +163,22 @@ function HomeClient() {
         <div className='max-w-[95%] mx-auto'>
           {/* 首页内容 */}
           <>
-              {/* AI问片入口 */}
-              {aiEnabled && (
-                <div className='flex items-center justify-end mb-4'>
+              {/* 源站寻片和AI问片入口 */}
+              <div className='flex items-center justify-end gap-2 mb-4'>
+                {/* 源站寻片入口 */}
+                {sourceSearchEnabled && (
+                  <Link href='/source-search'>
+                    <button
+                      className='p-2 rounded-lg text-blue-500 hover:text-blue-600 transition-colors'
+                      title='源站寻片'
+                    >
+                      <ListVideo size={20} />
+                    </button>
+                  </Link>
+                )}
+
+                {/* AI问片入口 */}
+                {aiEnabled && (
                   <button
                     onClick={() => setShowAIChat(true)}
                     className='p-2 rounded-lg text-purple-500 hover:text-purple-600 transition-colors'
@@ -164,8 +186,8 @@ function HomeClient() {
                   >
                     <Bot size={20} />
                   </button>
-                </div>
-              )}
+                )}
+              </div>
 
               {/* 继续观看 */}
               <ContinueWatching />

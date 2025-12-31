@@ -155,6 +155,7 @@ export default async function RootLayout({
     AI_ENABLE_HOMEPAGE_ENTRY: aiEnableHomepageEntry,
     AI_ENABLE_VIDEOCARD_ENTRY: aiEnableVideoCardEntry,
     AI_ENABLE_PLAYPAGE_ENTRY: aiEnablePlayPageEntry,
+    ENABLE_SOURCE_SEARCH: process.env.NEXT_PUBLIC_ENABLE_SOURCE_SEARCH !== 'false',
   };
 
   return (

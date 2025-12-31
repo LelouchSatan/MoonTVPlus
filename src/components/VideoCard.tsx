@@ -40,7 +40,7 @@ export interface VideoCardProps {
   source_names?: string[];
   progress?: number;
   year?: string;
-  from: 'playrecord' | 'favorite' | 'search' | 'douban' | 'tmdb';
+  from: 'playrecord' | 'favorite' | 'search' | 'douban' | 'tmdb' | 'source-search';
   currentEpisode?: number;
   douban_id?: number;
   tmdb_id?: number;
@@ -440,6 +440,16 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(function VideoCard
         showDoubanLink: false,
         showRating: !!rate,
         showYear: false,
+      },
+      'source-search': {
+        showSourceName: false,
+        showProgress: false,
+        showPlayButton: true,
+        showHeart: true,
+        showCheckCircle: false,
+        showDoubanLink: true,
+        showRating: !!rate,
+        showYear: true,
       },
     };
     return configs[from] || configs.search;
