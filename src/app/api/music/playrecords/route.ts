@@ -81,44 +81,95 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { key, record }: { key: string; record: MusicPlayRecord } = body;
 
-    if (!key || !record) {
-      return NextResponse.json(
-        { error: 'Missing key or record' },
-        { status: 400 }
-      );
+    // 检查是否是批量添加
+    if (Array.isArray(body.records)) {
+      // 批量添加
+      const records: Array<{ platform: string; id: string; record: MusicPlayRecord }> = [];
+
+      for (const item of body.records) {
+        const { key, record } = item;
+        if (!key || !record) {
+          return NextResponse.json(
+            { error: 'Missing key or record in batch item' },
+            { status: 400 }
+          );
+        }
+
+        // 验证音乐播放记录数据
+        if (!record.platform || !record.id || !record.name || !record.artist) {
+          return NextResponse.json(
+            { error: 'Invalid record data in batch item' },
+            { status: 400 }
+          );
+        }
+
+        // 从key中解析platform和id
+        const [platform, id] = key.split('+');
+        if (!platform || !id) {
+          return NextResponse.json(
+            { error: 'Invalid key format in batch item' },
+            { status: 400 }
+          );
+        }
+
+        records.push({ platform, id, record });
+
+        // 缓存歌曲信息到服务器内存
+        setCachedSong(platform, id, {
+          id: record.id,
+          name: record.name,
+          artist: record.artist,
+          album: record.album,
+          pic: record.pic,
+        });
+      }
+
+      // 批量保存到数据库
+      await db.batchSaveMusicPlayRecords(authInfo.username, records);
+
+      return NextResponse.json({ success: true, count: records.length }, { status: 200 });
+    } else {
+      // 单个添加（保持向后兼容）
+      const { key, record }: { key: string; record: MusicPlayRecord } = body;
+
+      if (!key || !record) {
+        return NextResponse.json(
+          { error: 'Missing key or record' },
+          { status: 400 }
+        );
+      }
+
+      // 验证音乐播放记录数据
+      if (!record.platform || !record.id || !record.name || !record.artist) {
+        return NextResponse.json(
+          { error: 'Invalid record data' },
+          { status: 400 }
+        );
+      }
+
+      // 从key中解析platform和id
+      const [platform, id] = key.split('+');
+      if (!platform || !id) {
+        return NextResponse.json(
+          { error: 'Invalid key format' },
+          { status: 400 }
+        );
+      }
+
+      await db.saveMusicPlayRecord(authInfo.username, platform, id, record);
+
+      // 缓存歌曲信息到服务器内存
+      setCachedSong(platform, id, {
+        id: record.id,
+        name: record.name,
+        artist: record.artist,
+        album: record.album,
+        pic: record.pic,
+      });
+
+      return NextResponse.json({ success: true }, { status: 200 });
     }
-
-    // 验证音乐播放记录数据
-    if (!record.platform || !record.id || !record.name || !record.artist) {
-      return NextResponse.json(
-        { error: 'Invalid record data' },
-        { status: 400 }
-      );
-    }
-
-    // 从key中解析platform和id
-    const [platform, id] = key.split('+');
-    if (!platform || !id) {
-      return NextResponse.json(
-        { error: 'Invalid key format' },
-        { status: 400 }
-      );
-    }
-
-    await db.saveMusicPlayRecord(authInfo.username, platform, id, record);
-
-    // 缓存歌曲信息到服务器内存
-    setCachedSong(platform, id, {
-      id: record.id,
-      name: record.name,
-      artist: record.artist,
-      album: record.album,
-      pic: record.pic,
-    });
-
-    return NextResponse.json({ success: true }, { status: 200 });
   } catch (err) {
     console.error('保存音乐播放记录失败', err);
     return NextResponse.json(

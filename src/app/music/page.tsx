@@ -3,6 +3,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   getAllMusicPlayRecords,
   saveMusicPlayRecord,
@@ -10,6 +11,8 @@ import {
   deleteMusicPlayRecord,
   clearAllMusicPlayRecords,
 } from '@/lib/db.client';
+import AddToPlaylistModal from '@/components/AddToPlaylistModal';
+import Toast, { ToastProps } from '@/components/Toast';
 
 interface Song {
   id: string;
@@ -17,7 +20,7 @@ interface Song {
   artist: string;
   album?: string;
   pic?: string;
-  platform?: 'netease' | 'qq' | 'kuwo'; // 添加平台信息
+  platform: 'netease' | 'qq' | 'kuwo'; // 添加平台信息
 }
 
 interface PlayRecord {
@@ -57,7 +60,7 @@ export default function MusicPage() {
   const [currentSource, setCurrentSource] = useState<'netease' | 'qq' | 'kuwo'>('netease');
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [songs, setSongs] = useState<Song[]>([]);
-  const [currentView, setCurrentView] = useState<'playlists' | 'songs'>('playlists');
+  const [currentView, setCurrentView] = useState<'playlists' | 'songs' | 'myPlaylists'>('playlists');
   const [currentPlaylistTitle, setCurrentPlaylistTitle] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
@@ -81,6 +84,33 @@ export default function MusicPage() {
   const [showQualityMenu, setShowQualityMenu] = useState(false); // 音质选择菜单
   const [showVolumeSlider, setShowVolumeSlider] = useState(false); // 音量滑块显示状态
   const [pendingSongToPlay, setPendingSongToPlay] = useState<{ platform: string; id: string } | null>(null); // 待播放的歌曲信息
+  const [showAddToPlaylistModal, setShowAddToPlaylistModal] = useState(false); // 添加到歌单弹窗
+  const [songToAddToPlaylist, setSongToAddToPlaylist] = useState<Song | null>(null); // 要添加到歌单的歌曲
+
+  // 我的歌单相关状态
+  const [userPlaylists, setUserPlaylists] = useState<any[]>([]);
+  const [selectedUserPlaylist, setSelectedUserPlaylist] = useState<any | null>(null);
+  const [userPlaylistSongs, setUserPlaylistSongs] = useState<any[]>([]);
+  const [loadingUserPlaylists, setLoadingUserPlaylists] = useState(false);
+  const [loadingUserPlaylistSongs, setLoadingUserPlaylistSongs] = useState(false);
+  const [loadingPlayAll, setLoadingPlayAll] = useState(false); // 播放全部加载状态
+  const [deletingPlaylistId, setDeletingPlaylistId] = useState<string | null>(null); // 正在删除的歌单ID
+
+  // Toast 和 Confirm Modal 状态
+  const [toast, setToast] = useState<ToastProps | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    onCancel: () => {},
+  });
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
@@ -358,8 +388,272 @@ export default function MusicPage() {
     }
   };
 
+  // 打开添加到歌单弹窗
+  const handleAddToPlaylist = (song: Song, e: React.MouseEvent) => {
+    e.stopPropagation(); // 阻止事件冒泡，避免触发播放
+    setSongToAddToPlaylist(song);
+    setShowAddToPlaylistModal(true);
+  };
+
+  // 加载用户歌单列表
+  const loadUserPlaylists = async () => {
+    try {
+      setLoadingUserPlaylists(true);
+      const response = await fetch('/api/music/playlists');
+      if (response.ok) {
+        const data = await response.json();
+        setUserPlaylists(data.playlists || []);
+      }
+    } catch (error) {
+      console.error('加载歌单失败:', error);
+    } finally {
+      setLoadingUserPlaylists(false);
+    }
+  };
+
+  // 加载歌单中的歌曲
+  const loadUserPlaylistSongs = async (playlistId: string) => {
+    try {
+      setLoadingUserPlaylistSongs(true);
+      const response = await fetch(`/api/music/playlists/songs?playlistId=${playlistId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setUserPlaylistSongs(data.songs || []);
+      }
+    } catch (error) {
+      console.error('加载歌单歌曲失败:', error);
+    } finally {
+      setLoadingUserPlaylistSongs(false);
+    }
+  };
+
+  // 选择歌单
+  const handleSelectUserPlaylist = (playlist: any) => {
+    setSelectedUserPlaylist(playlist);
+    loadUserPlaylistSongs(playlist.id);
+  };
+
+  // 播放全部歌单歌曲
+  const handlePlayAllPlaylist = async () => {
+    if (!selectedUserPlaylist || userPlaylistSongs.length === 0) {
+      setToast({
+        message: '歌单为空',
+        type: 'error',
+        onClose: () => setToast(null),
+      });
+      return;
+    }
+
+    setLoadingPlayAll(true);
+    try {
+      // 1. 清空所有播放历史
+      await clearAllMusicPlayRecords();
+
+      // 2. 清空本地状态
+      setPlayRecords([]);
+      setPlaylist([]);
+
+      // 3. 批量添加歌单中的所有歌曲到播放历史
+      const baseTime = Date.now();
+      const recordsToAdd = userPlaylistSongs.map((song, i) => ({
+        key: `${song.platform}+${song.id}`,
+        record: {
+          platform: song.platform,
+          id: song.id,
+          name: song.name,
+          artist: song.artist,
+          album: song.album,
+          pic: song.pic,
+          play_time: 0,
+          duration: song.duration || 0,
+          save_time: baseTime + i, // 使用递增的时间戳
+        },
+      }));
+
+      // 一次性批量添加所有歌曲
+      const response = await fetch('/api/music/playrecords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          records: recordsToAdd,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('批量添加歌曲失败');
+      }
+
+      // 4. 立即更新本地状态
+      const newRecords: PlayRecord[] = userPlaylistSongs.map((song, i) => ({
+        platform: song.platform,
+        id: song.id,
+        playTime: 0,
+        duration: song.duration || 0,
+        timestamp: baseTime + i,
+      }));
+
+      const newPlaylist: Song[] = userPlaylistSongs.map((song) => ({
+        id: song.id,
+        name: song.name,
+        artist: song.artist,
+        album: song.album,
+        pic: song.pic,
+        platform: song.platform,
+      }));
+
+      setPlayRecords(newRecords);
+      setPlaylist(newPlaylist);
+
+      // 5. 直接播放第一首歌
+      if (userPlaylistSongs.length > 0) {
+        console.log('播放全部: 准备播放第一首歌', userPlaylistSongs[0]);
+        setPlaylistIndex(0);
+        await playSong(userPlaylistSongs[0], 0);
+      }
+
+      setToast({
+        message: `已将 ${userPlaylistSongs.length} 首歌曲添加到播放列表`,
+        type: 'success',
+        onClose: () => setToast(null),
+      });
+    } catch (error) {
+      console.error('播放全部失败:', error);
+      setToast({
+        message: '播放全部失败',
+        type: 'error',
+        onClose: () => setToast(null),
+      });
+    } finally {
+      setLoadingPlayAll(false);
+    }
+  };
+
+  // 删除歌单
+  const handleDeleteUserPlaylist = async (playlistId: string) => {
+    setConfirmModal({
+      isOpen: true,
+      title: '确认删除',
+      message: '确定要删除这个歌单吗？',
+      onConfirm: async () => {
+        // 先关闭确认框
+        setConfirmModal({
+          isOpen: false,
+          title: '',
+          message: '',
+          onConfirm: () => {},
+          onCancel: () => {},
+        });
+
+        // 然后执行删除
+        setDeletingPlaylistId(playlistId);
+        try {
+          const response = await fetch(`/api/music/playlists?playlistId=${playlistId}`, {
+            method: 'DELETE',
+          });
+
+          if (response.ok) {
+            setToast({
+              message: '删除成功',
+              type: 'success',
+              onClose: () => setToast(null),
+            });
+            if (selectedUserPlaylist?.id === playlistId) {
+              setSelectedUserPlaylist(null);
+              setUserPlaylistSongs([]);
+            }
+            loadUserPlaylists();
+          } else {
+            const data = await response.json();
+            setToast({
+              message: data.error || '删除失败',
+              type: 'error',
+              onClose: () => setToast(null),
+            });
+          }
+        } catch (error) {
+          console.error('删除歌单失败:', error);
+          setToast({
+            message: '删除歌单失败',
+            type: 'error',
+            onClose: () => setToast(null),
+          });
+        } finally {
+          setDeletingPlaylistId(null);
+        }
+      },
+      onCancel: () => {
+        setConfirmModal({
+          isOpen: false,
+          title: '',
+          message: '',
+          onConfirm: () => {},
+          onCancel: () => {},
+        });
+      },
+    });
+  };
+
+  // 从歌单中移除歌曲
+  const handleRemoveSongFromUserPlaylist = async (song: any) => {
+    if (!selectedUserPlaylist) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: '确认移除',
+      message: `确定要从歌单中移除 "${song.name}" 吗？`,
+      onConfirm: async () => {
+        try {
+          const response = await fetch(
+            `/api/music/playlists/songs?playlistId=${selectedUserPlaylist.id}&platform=${song.platform}&songId=${song.id}`,
+            { method: 'DELETE' }
+          );
+
+          if (response.ok) {
+            setToast({
+              message: '移除成功',
+              type: 'success',
+              onClose: () => setToast(null),
+            });
+            loadUserPlaylistSongs(selectedUserPlaylist.id);
+          } else {
+            const data = await response.json();
+            setToast({
+              message: data.error || '移除失败',
+              type: 'error',
+              onClose: () => setToast(null),
+            });
+          }
+        } catch (error) {
+          console.error('移除歌曲失败:', error);
+          setToast({
+            message: '移除歌曲失败',
+            type: 'error',
+            onClose: () => setToast(null),
+          });
+        }
+        setConfirmModal({
+          isOpen: false,
+          title: '',
+          message: '',
+          onConfirm: () => {},
+          onCancel: () => {},
+        });
+      },
+      onCancel: () => {
+        setConfirmModal({
+          isOpen: false,
+          title: '',
+          message: '',
+          onConfirm: () => {},
+          onCancel: () => {},
+        });
+      },
+    });
+  };
+
   // 播放歌曲
   const playSong = async (song: Song, index: number) => {
+    console.log('playSong 被调用:', song, 'index:', index);
     try {
       // 使用歌曲自己的平台信息，如果没有则使用当前选择的平台
       const platform = song.platform || currentSource;
@@ -372,6 +666,8 @@ export default function MusicPage() {
       setCurrentSongIndex(index);
       setShowPlayer(true);
       setLyrics([]); // 清空旧歌词
+
+      console.log('已设置 showPlayer=true, currentSong=', song);
 
       // 添加到播放记录和播放列表
       const record: PlayRecord = {
@@ -596,6 +892,10 @@ export default function MusicPage() {
     if (currentView === 'songs') {
       setCurrentView('playlists');
       setSongs([]);
+    } else if (currentView === 'myPlaylists') {
+      setCurrentView('playlists');
+      setSelectedUserPlaylist(null);
+      setUserPlaylistSongs([]);
     } else {
       router.back();
     }
@@ -774,6 +1074,13 @@ export default function MusicPage() {
     loadPlaylists(currentSource);
   }, [currentSource]);
 
+  // 当切换到我的歌单视图时加载歌单列表
+  useEffect(() => {
+    if (currentView === 'myPlaylists') {
+      loadUserPlaylists();
+    }
+  }, [currentView]);
+
   // 歌词自动滚动
   useEffect(() => {
     if (lyricsContainerRef.current && currentLyricIndex >= 0) {
@@ -840,6 +1147,7 @@ export default function MusicPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
+      <>
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 z-40 bg-zinc-950/95 backdrop-blur-md border-b border-white/10 px-4 md:px-6">
         <div className="w-full mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 py-3">
@@ -895,7 +1203,7 @@ export default function MusicPage() {
             </div>
           </div>
           <div className="flex items-center w-full md:flex-1 md:max-w-md md:ml-auto h-10 md:h-9 gap-2">
-            {currentView === 'songs' && (
+            {(currentView === 'songs' || currentView === 'myPlaylists') && (
               <button
                 onClick={goBack}
                 className="w-10 h-full rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white border border-white/10"
@@ -920,6 +1228,15 @@ export default function MusicPage() {
                 placeholder="搜索歌曲或艺术家..."
               />
             </div>
+            <button
+              onClick={() => setCurrentView('myPlaylists')}
+              className="w-10 h-full rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center text-white border border-white/10 shrink-0"
+              title="我的歌单"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+              </svg>
+            </button>
           </div>
         </div>
       </header>
@@ -986,22 +1303,222 @@ export default function MusicPage() {
                 {songs.map((song, index) => (
                   <div
                     key={`${song.id}-${index}`}
-                    onClick={() => playSong(song, index)}
-                    className={`grid grid-cols-[40px_1fr_auto] md:grid-cols-[50px_2fr_1fr_auto] gap-2 px-3 py-3 rounded-lg cursor-pointer transition-all ${
+                    className={`grid grid-cols-[40px_1fr_auto_auto] md:grid-cols-[50px_2fr_1fr_auto_auto] gap-2 px-3 py-3 rounded-lg cursor-pointer transition-all ${
                       currentSongIndex === index
                         ? 'bg-white/12 border-l-2 border-green-500'
                         : 'hover:bg-white/5'
                     }`}
                   >
-                    <div className="text-center text-zinc-500 text-sm">{index + 1}</div>
-                    <div className="min-w-0">
+                    <div
+                      className="text-center text-zinc-500 text-sm col-span-1"
+                      onClick={() => playSong(song, index)}
+                    >
+                      {index + 1}
+                    </div>
+                    <div
+                      className="min-w-0 col-span-1"
+                      onClick={() => playSong(song, index)}
+                    >
                       <div className="text-sm font-medium text-white truncate">{song.name}</div>
                       <div className="text-xs text-zinc-500 truncate md:hidden">{song.artist}</div>
                     </div>
-                    <div className="hidden md:block text-sm text-zinc-400 truncate">{song.artist}</div>
-                    <div className="text-xs text-zinc-600">{getSourceLabel()}</div>
+                    <div
+                      className="hidden md:block text-sm text-zinc-400 truncate col-span-1"
+                      onClick={() => playSong(song, index)}
+                    >
+                      {song.artist}
+                    </div>
+                    <div
+                      className="text-xs text-zinc-600 col-span-1"
+                      onClick={() => playSong(song, index)}
+                    >
+                      {getSourceLabel()}
+                    </div>
+                    <button
+                      onClick={(e) => handleAddToPlaylist(song, e)}
+                      className="text-zinc-500 hover:text-red-500 transition-colors p-1 col-span-1"
+                      title="添加到歌单"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                      </svg>
+                    </button>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* My Playlists View */}
+          {currentView === 'myPlaylists' && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Playlists List */}
+              <div className="md:col-span-1">
+                <div className="bg-zinc-800/50 rounded-xl p-4 border border-white/10">
+                  <h2 className="text-lg font-bold mb-4">歌单列表</h2>
+                  {loadingUserPlaylists ? (
+                    <div className="text-center py-8 text-zinc-400">加载中...</div>
+                  ) : userPlaylists.length === 0 ? (
+                    <div className="text-center py-8 text-zinc-400">
+                      还没有歌单
+                      <br />
+                      <button
+                        onClick={() => setCurrentView('playlists')}
+                        className="mt-4 px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                      >
+                        去添加歌曲
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {userPlaylists.map((playlist) => (
+                        <div
+                          key={playlist.id}
+                          className={`p-3 rounded-lg cursor-pointer transition-colors ${
+                            selectedUserPlaylist?.id === playlist.id
+                              ? 'bg-green-600/20 border border-green-500'
+                              : 'bg-white/5 hover:bg-white/10'
+                          }`}
+                          onClick={() => handleSelectUserPlaylist(playlist)}
+                        >
+                          <div className="flex items-center gap-3">
+                            {playlist.cover ? (
+                              <img
+                                src={playlist.cover}
+                                alt={playlist.name}
+                                className="w-12 h-12 rounded object-cover"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded bg-zinc-700 flex items-center justify-center">
+                                <svg className="w-6 h-6 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                                </svg>
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate">{playlist.name}</div>
+                              {playlist.description && (
+                                <div className="text-xs text-zinc-500 truncate">{playlist.description}</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Playlist Songs */}
+              <div className="md:col-span-2">
+                {selectedUserPlaylist ? (
+                  <div className="bg-zinc-800/50 rounded-xl p-4 border border-white/10">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h2 className="text-lg font-bold">{selectedUserPlaylist.name}</h2>
+                        {selectedUserPlaylist.description && (
+                          <p className="text-sm text-zinc-400 mt-1">{selectedUserPlaylist.description}</p>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handlePlayAllPlaylist}
+                          disabled={userPlaylistSongs.length === 0 || loadingPlayAll}
+                          className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-zinc-700 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+                        >
+                          {loadingPlayAll ? (
+                            <>
+                              <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              加载中...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                              播放全部
+                            </>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteUserPlaylist(selectedUserPlaylist.id)}
+                          disabled={deletingPlaylistId !== null}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-zinc-700 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center gap-2"
+                        >
+                          {deletingPlaylistId === selectedUserPlaylist.id ? (
+                            <>
+                              <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                              </svg>
+                              删除中...
+                            </>
+                          ) : (
+                            '删除歌单'
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {loadingUserPlaylistSongs ? (
+                      <div className="text-center py-8 text-zinc-400">加载中...</div>
+                    ) : userPlaylistSongs.length === 0 ? (
+                      <div className="text-center py-8 text-zinc-400">歌单为空</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {userPlaylistSongs.map((song, index) => (
+                          <div
+                            key={`${song.platform}+${song.id}`}
+                            className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+                          >
+                            <div className="text-zinc-500 text-sm w-8 text-center">{index + 1}</div>
+                            {song.pic && (
+                              <img
+                                src={song.pic}
+                                alt={song.name}
+                                className="w-12 h-12 rounded object-cover"
+                              />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium truncate">{song.name}</div>
+                              <div className="text-sm text-zinc-400 truncate">{song.artist}</div>
+                            </div>
+                            <button
+                              onClick={() => playSong(song, index)}
+                              className="text-zinc-500 hover:text-green-500 transition-colors p-2"
+                              title="播放"
+                            >
+                              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => handleRemoveSongFromUserPlaylist(song)}
+                              className="text-zinc-500 hover:text-red-500 transition-colors p-2"
+                              title="移除"
+                            >
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="bg-zinc-800/50 rounded-xl p-4 border border-white/10 h-full flex items-center justify-center">
+                    <div className="text-center text-zinc-400">
+                      <svg className="w-16 h-16 mx-auto mb-4 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                      </svg>
+                      <p>选择一个歌单查看详情</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1009,6 +1526,7 @@ export default function MusicPage() {
       </main>
 
       {/* Player */}
+      {console.log('渲染检查: showPlayer=', showPlayer, 'currentSong=', currentSong)}
       {showPlayer && currentSong && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[95%] max-w-3xl z-50">
           <div className="bg-zinc-900/95 backdrop-blur-md rounded-xl p-4 border border-white/10 shadow-2xl">
@@ -1095,6 +1613,21 @@ export default function MusicPage() {
                     className="w-16 h-1 bg-white/10 rounded-full appearance-none cursor-pointer"
                   />
                 </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (currentSong) {
+                      setSongToAddToPlaylist(currentSong);
+                      setShowAddToPlaylistModal(true);
+                    }
+                  }}
+                  className="text-zinc-500 hover:text-red-500 transition-colors"
+                  title="添加到歌单"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                  </svg>
+                </button>
                 <button
                   onClick={downloadSong}
                   className="text-zinc-500 hover:text-white transition-colors"
@@ -1350,6 +1883,22 @@ export default function MusicPage() {
                     </div>
                   </div>
                 </div>
+                {/* 添加到歌单按钮 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (currentSong) {
+                      setSongToAddToPlaylist(currentSong);
+                      setShowAddToPlaylistModal(true);
+                    }
+                  }}
+                  className="text-zinc-500 hover:text-red-500 transition-colors"
+                  title="添加到歌单"
+                >
+                  <svg className="w-4 h-4 md:w-5 md:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                  </svg>
+                </button>
               </div>
 
               {/* 进度条 */}
@@ -1651,6 +2200,109 @@ export default function MusicPage() {
           </div>
         </div>
       )}
+
+      {/* Add to Playlist Modal */}
+      <AddToPlaylistModal
+        song={songToAddToPlaylist}
+        isOpen={showAddToPlaylistModal}
+        onClose={() => {
+          setShowAddToPlaylistModal(false);
+          setSongToAddToPlaylist(null);
+        }}
+        onSuccess={() => {
+          setToast({
+            message: '已添加到歌单',
+            type: 'success',
+            onClose: () => setToast(null),
+          });
+        }}
+        onError={(message) => {
+          setToast({
+            message,
+            type: 'error',
+            onClose: () => setToast(null),
+          });
+        }}
+      />
+
+      {/* Toast */}
+      {toast && <Toast {...toast} />}
+
+      {/* Confirm Modal */}
+      {confirmModal.isOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+            style={{ zIndex: 99999 }}
+            onClick={confirmModal.onCancel}
+          >
+            <div
+              className="bg-zinc-900 rounded-xl max-w-md w-full border border-white/10"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-white">
+                    {confirmModal.title}
+                  </h3>
+                  <button
+                    onClick={confirmModal.onCancel}
+                    className="text-zinc-400 hover:text-white transition-colors"
+                  >
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="mb-6">
+                  <p className="text-sm text-zinc-400">
+                    {confirmModal.message}
+                  </p>
+                </div>
+
+                <div className="flex justify-end space-x-3">
+                  <button
+                    onClick={confirmModal.onCancel}
+                    disabled={deletingPlaylistId !== null}
+                    className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={confirmModal.onConfirm}
+                    disabled={deletingPlaylistId !== null}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                  >
+                    {deletingPlaylistId !== null ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        删除中...
+                      </>
+                    ) : (
+                      '确定'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+      </>
     </div>
   );
 }

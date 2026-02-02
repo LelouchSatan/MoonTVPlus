@@ -537,6 +537,21 @@ export abstract class BaseRedisStorage implements IStorage {
     );
   }
 
+  async batchSetMusicPlayRecords(userName: string, records: { key: string; record: any }[]): Promise<void> {
+    if (records.length === 0) return;
+
+    const hashKey = this.musicPlayRecordHashKey(userName);
+    const data: Record<string, string> = {};
+
+    for (const { key, record } of records) {
+      data[key] = JSON.stringify(record);
+    }
+
+    await this.withRetry(() =>
+      this.adapter.hSet(hashKey, data)
+    );
+  }
+
   async getAllMusicPlayRecords(userName: string): Promise<Record<string, any>> {
     const hashData = await this.withRetry(() =>
       this.adapter.hGetAll(this.musicPlayRecordHashKey(userName))
@@ -561,6 +576,219 @@ export abstract class BaseRedisStorage implements IStorage {
     await this.withRetry(() =>
       this.adapter.del(this.musicPlayRecordHashKey(userName))
     );
+  }
+
+  // ---------- 音乐歌单相关 ----------
+  private musicPlaylistsKey(userName: string) {
+    return `u:${userName}:music_playlists`;
+  }
+
+  private musicPlaylistKey(playlistId: string) {
+    return `music_playlist:${playlistId}`;
+  }
+
+  private musicPlaylistSongsKey(playlistId: string) {
+    return `music_playlist:${playlistId}:songs`;
+  }
+
+  async createMusicPlaylist(userName: string, playlist: {
+    id: string;
+    name: string;
+    description?: string;
+    cover?: string;
+  }): Promise<void> {
+    const now = Date.now();
+    const playlistData = {
+      id: playlist.id,
+      username: userName,
+      name: playlist.name,
+      description: playlist.description || '',
+      cover: playlist.cover || '',
+      created_at: now.toString(),
+      updated_at: now.toString(),
+    };
+
+    // 存储歌单信息
+    await this.withRetry(() =>
+      this.adapter.hSet(this.musicPlaylistKey(playlist.id), playlistData)
+    );
+
+    // 添加到用户的歌单列表（使用 sorted set，按创建时间排序）
+    await this.withRetry(() =>
+      this.adapter.zAdd(this.musicPlaylistsKey(userName), {
+        score: now,
+        value: playlist.id,
+      })
+    );
+  }
+
+  async getMusicPlaylist(playlistId: string): Promise<any | null> {
+    const data = await this.withRetry(() =>
+      this.adapter.hGetAll(this.musicPlaylistKey(playlistId))
+    );
+
+    if (!data || Object.keys(data).length === 0) return null;
+
+    return {
+      id: data.id,
+      username: data.username,
+      name: data.name,
+      description: data.description || undefined,
+      cover: data.cover || undefined,
+      created_at: parseInt(data.created_at, 10),
+      updated_at: parseInt(data.updated_at, 10),
+    };
+  }
+
+  async getUserMusicPlaylists(userName: string): Promise<any[]> {
+    // 获取用户的所有歌单ID（按创建时间倒序）
+    const playlistIds = await this.withRetry(() =>
+      this.adapter.zRange(this.musicPlaylistsKey(userName), 0, -1)
+    );
+
+    if (!playlistIds || playlistIds.length === 0) return [];
+
+    // 获取每个歌单的详细信息
+    const playlists = [];
+    for (const id of playlistIds) {
+      const playlist = await this.getMusicPlaylist(ensureString(id));
+      if (playlist) {
+        playlists.push(playlist);
+      }
+    }
+
+    // 按创建时间倒序排序
+    return playlists.sort((a, b) => b.created_at - a.created_at);
+  }
+
+  async updateMusicPlaylist(playlistId: string, updates: {
+    name?: string;
+    description?: string;
+    cover?: string;
+  }): Promise<void> {
+    const updateData: Record<string, string> = {
+      updated_at: Date.now().toString(),
+    };
+
+    if (updates.name !== undefined) {
+      updateData.name = updates.name;
+    }
+    if (updates.description !== undefined) {
+      updateData.description = updates.description || '';
+    }
+    if (updates.cover !== undefined) {
+      updateData.cover = updates.cover || '';
+    }
+
+    await this.withRetry(() =>
+      this.adapter.hSet(this.musicPlaylistKey(playlistId), updateData)
+    );
+  }
+
+  async deleteMusicPlaylist(playlistId: string): Promise<void> {
+    // 获取歌单信息以获取用户名
+    const playlist = await this.getMusicPlaylist(playlistId);
+    if (!playlist) return;
+
+    // 从用户的歌单列表中移除
+    await this.withRetry(() =>
+      this.adapter.zRem(this.musicPlaylistsKey(playlist.username), playlistId)
+    );
+
+    // 删除歌单信息
+    await this.withRetry(() =>
+      this.adapter.del(this.musicPlaylistKey(playlistId))
+    );
+
+    // 删除歌单的歌曲列表
+    await this.withRetry(() =>
+      this.adapter.del(this.musicPlaylistSongsKey(playlistId))
+    );
+  }
+
+  async addSongToPlaylist(playlistId: string, song: {
+    platform: string;
+    id: string;
+    name: string;
+    artist: string;
+    album?: string;
+    pic?: string;
+    duration: number;
+  }): Promise<void> {
+    const now = Date.now();
+    const songKey = `${song.platform}+${song.id}`;
+
+    const songData = {
+      platform: song.platform,
+      id: song.id,
+      name: song.name,
+      artist: song.artist,
+      album: song.album || '',
+      pic: song.pic || '',
+      duration: song.duration.toString(),
+      added_at: now.toString(),
+    };
+
+    // 添加歌曲到歌单（使用 hash 存储歌曲信息）
+    await this.withRetry(() =>
+      this.adapter.hSet(this.musicPlaylistSongsKey(playlistId), songKey, JSON.stringify(songData))
+    );
+
+    // 更新歌单的 updated_at
+    await this.updateMusicPlaylist(playlistId, {});
+
+    // 如果是第一首歌且有封面，更新歌单封面
+    const songs = await this.getPlaylistSongs(playlistId);
+    if (songs.length === 1 && song.pic) {
+      await this.updateMusicPlaylist(playlistId, { cover: song.pic });
+    }
+  }
+
+  async removeSongFromPlaylist(playlistId: string, platform: string, songId: string): Promise<void> {
+    const songKey = `${platform}+${songId}`;
+
+    await this.withRetry(() =>
+      this.adapter.hDel(this.musicPlaylistSongsKey(playlistId), songKey)
+    );
+
+    // 更新歌单的 updated_at
+    await this.updateMusicPlaylist(playlistId, {});
+  }
+
+  async getPlaylistSongs(playlistId: string): Promise<any[]> {
+    const songsData = await this.withRetry(() =>
+      this.adapter.hGetAll(this.musicPlaylistSongsKey(playlistId))
+    );
+
+    if (!songsData || Object.keys(songsData).length === 0) return [];
+
+    const songs = [];
+    for (const [, value] of Object.entries(songsData)) {
+      if (value) {
+        const song = JSON.parse(value);
+        songs.push({
+          platform: song.platform,
+          id: song.id,
+          name: song.name,
+          artist: song.artist,
+          album: song.album || undefined,
+          pic: song.pic || undefined,
+          duration: parseFloat(song.duration),
+          added_at: parseInt(song.added_at, 10),
+        });
+      }
+    }
+
+    // 按添加时间排序
+    return songs.sort((a, b) => a.added_at - b.added_at);
+  }
+
+  async isSongInPlaylist(playlistId: string, platform: string, songId: string): Promise<boolean> {
+    const songKey = `${platform}+${songId}`;
+    const exists = await this.withRetry(() =>
+      this.adapter.hGet(this.musicPlaylistSongsKey(playlistId), songKey)
+    );
+    return exists !== null;
   }
 
   // ---------- 用户注册 / 登录（旧版本，保持兼容） ----------

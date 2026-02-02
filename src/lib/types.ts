@@ -55,6 +55,7 @@ export interface IStorage {
   // 音乐播放记录相关
   getMusicPlayRecord(userName: string, key: string): Promise<any | null>;
   setMusicPlayRecord(userName: string, key: string, record: any): Promise<void>;
+  batchSetMusicPlayRecords(userName: string, records: { key: string; record: any }[]): Promise<void>;
   getAllMusicPlayRecords(userName: string): Promise<{ [key: string]: any }>;
   deleteMusicPlayRecord(userName: string, key: string): Promise<void>;
   clearAllMusicPlayRecords(userName: string): Promise<void>;

@@ -358,6 +358,52 @@ export class D1Storage implements IStorage {
     }
   }
 
+  async batchSetMusicPlayRecords(userName: string, records: { key: string; record: any }[]): Promise<void> {
+    if (records.length === 0) return;
+    if (!this.db) return;
+
+    try {
+      // 使用批量插入，D1 支持 batch 操作
+      const statements = records.map(({ key, record }) =>
+        this.db!
+          .prepare(`
+            INSERT INTO music_play_records (username, key, platform, song_id, name, artist, album, pic, play_time, duration, save_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(username, key) DO UPDATE SET
+              platform = excluded.platform,
+              song_id = excluded.song_id,
+              name = excluded.name,
+              artist = excluded.artist,
+              album = excluded.album,
+              pic = excluded.pic,
+              play_time = excluded.play_time,
+              duration = excluded.duration,
+              save_time = excluded.save_time
+          `)
+          .bind(
+            userName,
+            key,
+            record.platform,
+            record.id,
+            record.name,
+            record.artist,
+            record.album || null,
+            record.pic || null,
+            record.play_time,
+            record.duration,
+            record.save_time
+          )
+      );
+
+      if (this.db.batch) {
+        await this.db.batch(statements);
+      }
+    } catch (err) {
+      console.error('D1Storage.batchSetMusicPlayRecords error:', err);
+      throw err;
+    }
+  }
+
   async getAllMusicPlayRecords(userName: string): Promise<{ [key: string]: any }> {
     try {
       const results = await this.db
@@ -409,6 +455,261 @@ export class D1Storage implements IStorage {
     } catch (err) {
       console.error('D1Storage.clearAllMusicPlayRecords error:', err);
       throw err;
+    }
+  }
+
+  // ==================== 音乐歌单相关 ====================
+
+  async createMusicPlaylist(userName: string, playlist: {
+    id: string;
+    name: string;
+    description?: string;
+    cover?: string;
+  }): Promise<void> {
+    try {
+      const now = Date.now();
+      await this.db
+        .prepare(`
+          INSERT INTO music_playlists (id, username, name, description, cover, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .bind(
+          playlist.id,
+          userName,
+          playlist.name,
+          playlist.description || null,
+          playlist.cover || null,
+          now,
+          now
+        )
+        .run();
+    } catch (err) {
+      console.error('D1Storage.createMusicPlaylist error:', err);
+      throw err;
+    }
+  }
+
+  async getMusicPlaylist(playlistId: string): Promise<any | null> {
+    try {
+      const result = await this.db
+        .prepare('SELECT * FROM music_playlists WHERE id = ?')
+        .bind(playlistId)
+        .first();
+
+      if (!result) return null;
+
+      return {
+        id: result.id,
+        username: result.username,
+        name: result.name,
+        description: result.description || undefined,
+        cover: result.cover || undefined,
+        created_at: result.created_at,
+        updated_at: result.updated_at,
+      };
+    } catch (err) {
+      console.error('D1Storage.getMusicPlaylist error:', err);
+      return null;
+    }
+  }
+
+  async getUserMusicPlaylists(userName: string): Promise<any[]> {
+    try {
+      const results = await this.db
+        .prepare('SELECT * FROM music_playlists WHERE username = ? ORDER BY created_at DESC')
+        .bind(userName)
+        .all();
+
+      if (!results.results) return [];
+
+      return results.results.map((row) => ({
+        id: row.id,
+        username: row.username,
+        name: row.name,
+        description: row.description || undefined,
+        cover: row.cover || undefined,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }));
+    } catch (err) {
+      console.error('D1Storage.getUserMusicPlaylists error:', err);
+      return [];
+    }
+  }
+
+  async updateMusicPlaylist(playlistId: string, updates: {
+    name?: string;
+    description?: string;
+    cover?: string;
+  }): Promise<void> {
+    try {
+      const fields: string[] = [];
+      const values: any[] = [];
+
+      if (updates.name !== undefined) {
+        fields.push('name = ?');
+        values.push(updates.name);
+      }
+      if (updates.description !== undefined) {
+        fields.push('description = ?');
+        values.push(updates.description || null);
+      }
+      if (updates.cover !== undefined) {
+        fields.push('cover = ?');
+        values.push(updates.cover || null);
+      }
+
+      if (fields.length === 0) return;
+
+      fields.push('updated_at = ?');
+      values.push(Date.now());
+      values.push(playlistId);
+
+      await this.db
+        .prepare(`UPDATE music_playlists SET ${fields.join(', ')} WHERE id = ?`)
+        .bind(...values)
+        .run();
+    } catch (err) {
+      console.error('D1Storage.updateMusicPlaylist error:', err);
+      throw err;
+    }
+  }
+
+  async deleteMusicPlaylist(playlistId: string): Promise<void> {
+    try {
+      // 由于设置了 ON DELETE CASCADE，删除歌单会自动删除关联的歌曲
+      await this.db
+        .prepare('DELETE FROM music_playlists WHERE id = ?')
+        .bind(playlistId)
+        .run();
+    } catch (err) {
+      console.error('D1Storage.deleteMusicPlaylist error:', err);
+      throw err;
+    }
+  }
+
+  async addSongToPlaylist(playlistId: string, song: {
+    platform: string;
+    id: string;
+    name: string;
+    artist: string;
+    album?: string;
+    pic?: string;
+    duration: number;
+  }): Promise<void> {
+    try {
+      const now = Date.now();
+
+      // 获取当前最大的 sort_order
+      const maxOrderResult = await this.db
+        .prepare('SELECT MAX(sort_order) as max_order FROM music_playlist_songs WHERE playlist_id = ?')
+        .bind(playlistId)
+        .first();
+
+      const nextOrder = (maxOrderResult?.max_order as number || 0) + 1;
+
+      await this.db
+        .prepare(`
+          INSERT INTO music_playlist_songs (
+            playlist_id, platform, song_id, name, artist, album, pic, duration, added_at, sort_order
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(playlist_id, platform, song_id) DO UPDATE SET
+            name = excluded.name,
+            artist = excluded.artist,
+            album = excluded.album,
+            pic = excluded.pic,
+            duration = excluded.duration
+        `)
+        .bind(
+          playlistId,
+          song.platform,
+          song.id,
+          song.name,
+          song.artist,
+          song.album || null,
+          song.pic || null,
+          song.duration,
+          now,
+          nextOrder
+        )
+        .run();
+
+      // 更新歌单的 updated_at 和封面（如果是第一首歌）
+      const songCount = await this.db
+        .prepare('SELECT COUNT(*) as count FROM music_playlist_songs WHERE playlist_id = ?')
+        .bind(playlistId)
+        .first();
+
+      if ((songCount?.count as number) === 1 && song.pic) {
+        await this.updateMusicPlaylist(playlistId, { cover: song.pic });
+      } else {
+        await this.db
+          .prepare('UPDATE music_playlists SET updated_at = ? WHERE id = ?')
+          .bind(Date.now(), playlistId)
+          .run();
+      }
+    } catch (err) {
+      console.error('D1Storage.addSongToPlaylist error:', err);
+      throw err;
+    }
+  }
+
+  async removeSongFromPlaylist(playlistId: string, platform: string, songId: string): Promise<void> {
+    try {
+      await this.db
+        .prepare('DELETE FROM music_playlist_songs WHERE playlist_id = ? AND platform = ? AND song_id = ?')
+        .bind(playlistId, platform, songId)
+        .run();
+
+      // 更新歌单的 updated_at
+      await this.db
+        .prepare('UPDATE music_playlists SET updated_at = ? WHERE id = ?')
+        .bind(Date.now(), playlistId)
+        .run();
+    } catch (err) {
+      console.error('D1Storage.removeSongFromPlaylist error:', err);
+      throw err;
+    }
+  }
+
+  async getPlaylistSongs(playlistId: string): Promise<any[]> {
+    try {
+      const results = await this.db
+        .prepare('SELECT * FROM music_playlist_songs WHERE playlist_id = ? ORDER BY sort_order ASC')
+        .bind(playlistId)
+        .all();
+
+      if (!results.results) return [];
+
+      return results.results.map((row) => ({
+        platform: row.platform,
+        id: row.song_id,
+        name: row.name,
+        artist: row.artist,
+        album: row.album || undefined,
+        pic: row.pic || undefined,
+        duration: row.duration,
+        added_at: row.added_at,
+        sort_order: row.sort_order,
+      }));
+    } catch (err) {
+      console.error('D1Storage.getPlaylistSongs error:', err);
+      return [];
+    }
+  }
+
+  async isSongInPlaylist(playlistId: string, platform: string, songId: string): Promise<boolean> {
+    try {
+      const result = await this.db
+        .prepare('SELECT 1 FROM music_playlist_songs WHERE playlist_id = ? AND platform = ? AND song_id = ? LIMIT 1')
+        .bind(playlistId, platform, songId)
+        .first();
+
+      return result !== null;
+    } catch (err) {
+      console.error('D1Storage.isSongInPlaylist error:', err);
+      return false;
     }
   }
 
